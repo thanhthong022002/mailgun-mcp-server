@@ -9,7 +9,7 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for [Mailgun](https://mailgun.com) that gives AI agents a practical, workflow-oriented interface to send email, diagnose deliverability, and manage account operations.
 
 > [!NOTE]
-> This MCP server runs locally on your machine and communicates over stdio. Mailgun does not currently offer a hosted version of this server.
+> This MCP server runs on your own machine or infrastructure — Mailgun does not offer a hosted version. It speaks **stdio** by default, and can also serve the **Streamable HTTP** transport with `--transport http` (see [HTTP transport](#http-transport)).
 
 ### Capabilities
 
@@ -170,6 +170,12 @@ Add to `~/.gemini/settings.json`:
 | `MAILGUN_API_REGION`   | No       | `us`                 | API region: `us` or `eu`                                                                     |
 | `MAILGUN_API_HOSTNAME` | No       | (derived from region) | Override the API hostname (e.g. `api.eu.mailgun.net`). Takes precedence over the region.     |
 | `MAILGUN_MCP_TAGS`     | No       | (all)                | Comma-separated product tags to enable. Equivalent to `--tags`. The CLI flag takes precedence. |
+| `MAILGUN_MCP_TRANSPORT` | No      | `stdio`              | Transport to serve: `stdio` or `http`. Equivalent to `--transport`.                          |
+| `MAILGUN_MCP_HOST`     | No       | `127.0.0.1`          | HTTP transport bind interface. Equivalent to `--host`.                                       |
+| `MAILGUN_MCP_PORT`     | No       | `3000`               | HTTP transport port. Equivalent to `--port`.                                                 |
+| `MAILGUN_MCP_ENDPOINT` | No       | `/mcp`               | HTTP transport request path. Equivalent to `--endpoint`.                                     |
+| `MAILGUN_MCP_ALLOWED_HOSTS` | No  | (loopback aliases)   | Comma-separated `Host` header values accepted by the DNS-rebinding guard. Equivalent to `--allowed-hosts`. |
+| `MAILGUN_MCP_AUTH_TOKEN` | No     | (none)               | If set, HTTP requests must send `Authorization: Bearer <token>`. **Env-only** — there is no CLI flag, so the token stays out of the process command line. |
 
 ### CLI options
 
@@ -179,7 +185,14 @@ Pass flags after the package name in your client's `args` (e.g. `["-y", "@mailgu
 | ----------------- | -------------------------------------------------------------------------------------- |
 | `--tags <list>`   | Comma-separated product tags to enable (default: all). Valid: `send`, `validate`, `optimize`, `inspect`. |
 | `--list-tags`     | Print the valid tag values and exit.                                                   |
+| `--transport <kind>` | Transport to serve: `stdio` (default) or `http`.                                     |
+| `--host <host>`   | HTTP transport: interface to bind (default: `127.0.0.1`).                               |
+| `--port <port>`   | HTTP transport: port to listen on, `0` for any free port (default: `3000`).             |
+| `--endpoint <path>` | HTTP transport: request path to serve (default: `/mcp`).                              |
+| `--allowed-hosts <list>` | HTTP transport: comma-separated `Host` values accepted by the DNS-rebinding guard. |
 | `--help`, `-h`    | Show usage and exit.                                                                    |
+
+Every flag has an environment-variable equivalent (see the table above). The CLI flag wins when both are set.
 
 ### Tag filtering
 
@@ -216,6 +229,53 @@ Filtering uses **OR semantics**: a tool is registered if any of its tags appears
 
 > [!TIP]
 > Run the binary with `--list-tags` to print supported tag values, or `--help` for full usage. Unknown tags are rejected at startup with a clear error message.
+
+### HTTP transport
+
+By default the server speaks **stdio**: your MCP client launches it as a subprocess and talks to it over stdin/stdout. That is the right choice for a desktop client and needs no configuration.
+
+With `--transport http` the server instead listens for the **Streamable HTTP** transport, so a client can connect over the network rather than spawning the process. Use it when the client and the server run in different places — a remote client, a container, or several clients sharing one server process.
+
+```bash
+MAILGUN_API_KEY=YOUR-mailgun-api-key \
+MAILGUN_MCP_AUTH_TOKEN=YOUR-shared-secret \
+  npx -y @mailgun/mcp-server --transport http --port 3000
+```
+
+The server prints the endpoint it is serving and stays in the foreground:
+
+```
+Mailgun MCP Server listening on http://127.0.0.1:3000/mcp (Streamable HTTP)
+```
+
+Point a client at that URL:
+
+```json
+{
+  "mcpServers": {
+    "mailgun": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR-shared-secret"
+      }
+    }
+  }
+}
+```
+
+Sessions are stateful, per the MCP specification:
+
+- A client `initialize` request creates a session; the id comes back in the `Mcp-Session-Id` response header and must be sent on every subsequent request.
+- `GET` on the endpoint opens the server-to-client SSE stream for that session.
+- `DELETE` on the endpoint terminates the session. Requests carrying an unknown or terminated session id get `404`, which tells the client to re-initialize.
+- Each session gets its own server instance with its own tool registry, so tag filtering applies to all sessions equally.
+
+> [!IMPORTANT]
+> The HTTP transport has no authentication of its own, and the process holds your Mailgun API key — anything that can reach the endpoint can send mail and read your logs as you. The defaults are therefore deliberately conservative: the server binds `127.0.0.1` and rejects `Host` headers other than the loopback aliases. Before exposing it more widely, read [Exposing the HTTP transport](#exposing-the-http-transport).
+
+> [!NOTE]
+> The deprecated HTTP+SSE transport (two endpoints, `GET /sse` plus `POST /messages`) is **not** supported. It was replaced by Streamable HTTP in the 2025-03-26 revision of the MCP specification. `--transport sse` exits with a message pointing at `--transport http`.
 
 ## Sample Prompts
 
@@ -375,6 +435,13 @@ Open the Inspector UI, click **Connect**, then use **List Tools** to verify the 
 MAILGUN_API_KEY=YOUR-mailgun-api-key npx @modelcontextprotocol/inspector node dist/mailgun-mcp.js --tags validate,inspect
 ```
 
+To exercise the HTTP transport instead, start the server yourself and connect the Inspector to the URL it prints — set the transport to **Streamable HTTP** in the Inspector's sidebar:
+
+```bash
+MAILGUN_API_KEY=YOUR-mailgun-api-key node dist/mailgun-mcp.js --transport http --port 3000
+npx @modelcontextprotocol/inspector
+```
+
 ### Pre-commit hooks
 
 `npm install` installs a git pre-commit hook (via husky) that runs `oxlint --fix` and `oxfmt` on staged TypeScript/JavaScript files and runs `npm run check:versions`. Fixable issues are auto-fixed and re-staged; commits that introduce unfixable lint errors or version-sync mismatches are rejected. If you already had a local clone before this change, run `npm install` once to install the hook.
@@ -390,7 +457,20 @@ Your Mailgun API key is passed as an environment variable and is never exposed t
 
 ### Local execution
 
-The server runs locally on your machine. All communication with the Mailgun API is over HTTPS with TLS certificate validation enforced. No data is sent to third-party services beyond the Mailgun API.
+The server runs on your own machine or infrastructure. All communication with the Mailgun API is over HTTPS with TLS certificate validation enforced. No data is sent to third-party services beyond the Mailgun API.
+
+### Exposing the HTTP transport
+
+With the default stdio transport, only the process that spawned the server can talk to it. The HTTP transport removes that boundary, so treat the endpoint as a credential: it grants everything your Mailgun API key can do, and MCP defines no authentication of its own.
+
+The defaults keep the blast radius small, and each can be widened deliberately:
+
+- **Loopback bind.** The server binds `127.0.0.1`, so it is unreachable from other hosts. `--host 0.0.0.0` changes that.
+- **DNS-rebinding protection.** Requests whose `Host` header is not a loopback alias for the listening port are rejected. This stops a page in your browser from resolving its own hostname to `127.0.0.1` and driving your server. Binding a non-loopback interface requires naming the hostnames clients will use via `--allowed-hosts` (for example `--allowed-hosts mcp.internal:3000`); the server warns at startup if you bind a routable interface without one, because it cannot guess a safe allowlist.
+- **Bearer token.** Set `MAILGUN_MCP_AUTH_TOKEN` and every request must carry `Authorization: Bearer <token>`, compared in constant time. It is env-only so the secret never appears in `ps` output. The server warns at startup when the HTTP transport runs without a token.
+- **No CORS headers.** Browser-based clients are not supported; front the server with a proxy if you need them.
+
+Requests are capped at 4 MB. For anything beyond a trusted network, terminate TLS and enforce authentication in a reverse proxy in front of the server — the built-in bearer check is a guard rail, not an authorization system.
 
 ### API key permissions
 
@@ -414,7 +494,7 @@ All tool parameters are validated against the Mailgun OpenAPI specification usin
 
 ## Debugging
 
-The MCP server communicates over stdio. Refer to the [MCP Debugging Guide](https://modelcontextprotocol.io/docs/tools/debugging) for troubleshooting.
+The MCP server communicates over stdio by default, or Streamable HTTP with `--transport http`. Diagnostics go to stderr in both cases, so they never corrupt the stdio protocol stream. Refer to the [MCP Debugging Guide](https://modelcontextprotocol.io/docs/tools/debugging) for troubleshooting.
 
 ## License
 

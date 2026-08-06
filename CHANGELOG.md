@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+
+- **Streamable HTTP transport.** The server can now serve the MCP Streamable HTTP
+  transport in addition to stdio, so a client can connect over the network instead of
+  spawning the process: `--transport http` (or `MAILGUN_MCP_TRANSPORT=http`). stdio
+  remains the default, so existing configurations are unaffected.
+  - Configurable bind interface, port and path — `--host` (default `127.0.0.1`),
+    `--port` (default `3000`, `0` picks any free port) and `--endpoint`
+    (default `/mcp`), each with a `MAILGUN_MCP_*` environment equivalent.
+  - Stateful sessions per the MCP specification: `initialize` issues an
+    `Mcp-Session-Id`, `GET` opens the server-to-client SSE stream, `DELETE` terminates
+    the session, and unknown or terminated session ids return `404` so clients
+    re-initialize. Each session gets its own server instance and tool registry.
+  - `SIGINT`/`SIGTERM` close open sessions and the listener before exiting.
+  - No new runtime dependencies: the listener is built on `node:http`.
+- **HTTP transport hardening.** The process holds a Mailgun API key and MCP defines no
+  authentication of its own, so the defaults are restrictive: a loopback bind, plus
+  DNS-rebinding protection that rejects `Host` headers other than the loopback aliases
+  for the listening port (widen it with `--allowed-hosts`). Setting
+  `MAILGUN_MCP_AUTH_TOKEN` additionally requires `Authorization: Bearer <token>` on
+  every request, compared in constant time; it is env-only so the secret stays out of
+  the process command line. Request bodies are capped at 4 MB. The server warns at
+  startup when it runs without a token, or binds a routable interface with no
+  `Host` allowlist.
+- `--transport sse` is rejected with an explanatory error: the HTTP+SSE transport was
+  deprecated in the 2025-03-26 MCP specification, and Streamable HTTP replaces it.
+
+### Changed
+
+- Server construction moved to `createMcpServer()` in `src/create-server.ts`, which
+  both transports use — the HTTP transport needs one instance per session, because a
+  server can only be connected to one transport at a time. The entry point exports
+  that factory in place of the previous module-level `server` singleton.
+
 ## 2.1.0
 
 ### Added
