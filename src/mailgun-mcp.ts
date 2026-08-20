@@ -2,7 +2,8 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { formatHelp, formatInvalidTagsMessage, formatTagList, resolveActiveTags } from "./cli.js";
-import { MAILGUN_API_KEY, OPENAPI_YAML } from "./config.js";
+import { OPENAPI_YAML } from "./config.js";
+import { loadAccountsConfig, setActiveAccountsConfig, type AccountsConfig } from "./accounts.js";
 import { createMcpServer } from "./create-server.js";
 import { startHttpServer, isLoopbackBind, type HttpServerHandle } from "./http.js";
 import { loadOpenApiSpec } from "./openapi.js";
@@ -33,12 +34,16 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
 
-    if (!MAILGUN_API_KEY) {
-      console.error(
-        "Error: MAILGUN_API_KEY environment variable is required. Set it in your MCP client configuration.",
-      );
+    let accounts: AccountsConfig;
+    try {
+      accounts = loadAccountsConfig({ accountsFile: cli.accountsFile });
+    } catch (error) {
+      console.error(`Error: ${(error as Error).message}`);
       process.exit(1);
+      return;
     }
+    setActiveAccountsConfig(accounts);
+    console.error(formatAccountsBanner(accounts));
 
     const openApiSpec = loadOpenApiSpec(OPENAPI_YAML);
 
@@ -73,6 +78,16 @@ export async function main(): Promise<void> {
       process.exit(1);
     }
   }
+}
+
+export function formatAccountsBanner(accounts: AccountsConfig): string {
+  const names = [...accounts.accounts.keys()];
+  const plural = names.length === 1 ? "account" : "accounts";
+  const suffix =
+    accounts.defaultAccount === undefined
+      ? " (no default — tool calls must name an account)"
+      : ` (default: ${accounts.defaultAccount})`;
+  return `Mailgun MCP Server: ${names.length} ${plural} from ${accounts.source}: ${names.join(", ")}${suffix}`;
 }
 
 function installShutdownHandlers(handle: HttpServerHandle): void {

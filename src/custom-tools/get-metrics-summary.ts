@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { makeMailgunRequest, MailgunApiError } from "../api.js";
+import { accountParamSchema } from "../schema.js";
+import { resolveAccountName } from "../accounts.js";
 import { META_TAGS_KEY, type Tag } from "../tags.js";
 
 // --- Types ---
@@ -190,6 +192,7 @@ export function register(server: McpServer, tags: readonly Tag[] = []): void {
           .string()
           .optional()
           .describe("Timezone for the window (e.g. 'UTC', 'America/New_York'). Defaults to UTC."),
+        account: accountParamSchema(),
       },
       _meta: { [META_TAGS_KEY]: [...tags] },
     },
@@ -221,7 +224,12 @@ export function register(server: McpServer, tags: readonly Tag[] = []): void {
         };
       }
 
+      let accountName: string | undefined;
       try {
+        accountName = resolveAccountName(
+          typeof params.account === "string" ? params.account : undefined,
+        );
+
         const body = buildMetricsRequestBody(
           params as {
             domain: string;
@@ -237,9 +245,10 @@ export function register(server: McpServer, tags: readonly Tag[] = []): void {
           "/v1/analytics/metrics",
           body,
           "application/json",
+          accountName,
         )) as MetricsResponse;
 
-        const output = buildMetricsSummaryOutput(result);
+        const output = { account: accountName, ...buildMetricsSummaryOutput(result) };
         return {
           content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }],
         };
@@ -253,7 +262,7 @@ export function register(server: McpServer, tags: readonly Tag[] = []): void {
           "Unable to retrieve analytics metrics for the selected window.",
           retryable,
           isApiError
-            ? `POST /v1/analytics/metrics returned ${error.statusCode}: ${error.apiMessage ?? error.message}`
+            ? `POST /v1/analytics/metrics returned ${error.statusCode} for account '${accountName ?? "unresolved"}': ${error.apiMessage ?? error.message}`
             : `POST /v1/analytics/metrics failed: ${error instanceof Error ? error.message : String(error)}`,
         );
         return {

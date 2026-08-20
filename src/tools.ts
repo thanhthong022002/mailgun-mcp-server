@@ -9,7 +9,9 @@ import type {
 import { endpoints, parseEndpointEntry } from "./endpoints.js";
 import { makeMailgunRequest, MailgunApiError } from "./api.js";
 import { getOperationDetails, getRequestContentType } from "./openapi.js";
-import { buildParamsSchema, sanitizeToolId } from "./schema.js";
+import { addAccountParam, buildParamsSchema, sanitizeToolId } from "./schema.js";
+import { resolveAccountName } from "./accounts.js";
+import { invalidateOnWrite } from "./domain-cache.js";
 import { type ActiveTags, META_TAGS_KEY, shouldRegister, type Tag } from "./tags.js";
 
 export const HttpStatus = {
@@ -47,6 +49,7 @@ export function generateToolsFromOpenApi(
 
       const { operation, operationId } = operationDetails;
       const { paramsSchema, keyMapping } = buildParamsSchema(operation, openApiSpec);
+      const accountKey = addAccountParam(paramsSchema);
       const toolId = toolNameOverride ?? sanitizeToolId(operationId);
       const toolDescription = operation.summary || `${method.toUpperCase()} ${path}`;
       const contentType = getRequestContentType(operation);
@@ -62,6 +65,7 @@ export function generateToolsFromOpenApi(
         contentType,
         keyMapping,
         tags,
+        accountKey,
       );
     } catch (error) {
       const label = typeof entry === "string" ? entry : entry.endpoint;
@@ -81,6 +85,7 @@ export function registerTool(
   contentType: string,
   keyMapping: Record<string, string> = {},
   tags: readonly Tag[] = [],
+  accountKey: string | undefined = undefined,
 ): void {
   const httpMethod = method.toUpperCase();
   server.registerTool(
@@ -91,9 +96,21 @@ export function registerTool(
       _meta: { [META_TAGS_KEY]: [...tags] },
     },
     async (params) => {
+      let accountName: string | undefined;
       try {
+        // Pull the account selector out before anything else: it is a server
+        // concern, and separateParameters() would otherwise post it as a field.
+        const callParams: Record<string, unknown> = { ...params };
+        let requestedAccount: string | undefined;
+        if (accountKey !== undefined && accountKey in callParams) {
+          const value = callParams[accountKey];
+          delete callParams[accountKey];
+          if (typeof value === "string") requestedAccount = value;
+        }
+        accountName = resolveAccountName(requestedAccount);
+
         const originalParams: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(params)) {
+        for (const [key, value] of Object.entries(callParams)) {
           const originalKey = keyMapping[key] || key;
           originalParams[originalKey] = value;
         }
@@ -111,13 +128,18 @@ export function registerTool(
           finalPath,
           httpMethod === "GET" ? null : bodyParams,
           contentType,
+          accountName,
         );
+
+        // A successful write may have changed what a domain listing reports, so
+        // drop this account's cached listing rather than serve it for 24 hours.
+        invalidateOnWrite(httpMethod, finalPath, accountName);
 
         return {
           content: [
             {
               type: "text" as const,
-              text: `${httpMethod} ${finalPath} completed successfully:\n${JSON.stringify(result, null, 2)}`,
+              text: `[account: ${accountName}] ${httpMethod} ${finalPath} completed successfully:\n${JSON.stringify(result, null, 2)}`,
             },
           ],
         };
@@ -127,7 +149,7 @@ export function registerTool(
           content: [
             {
               type: "text" as const,
-              text: formatErrorMessage(error, httpMethod, path),
+              text: formatErrorMessage(error, httpMethod, path, accountName),
             },
           ],
         };
@@ -203,12 +225,21 @@ export function appendQueryString(path: string, queryParams: Record<string, unkn
   return `${path}?${qs}`;
 }
 
-export function formatErrorMessage(error: unknown, method: string, path: string): string {
+export function formatErrorMessage(
+  error: unknown,
+  method: string,
+  path: string,
+  account?: string,
+): string {
+  const prefix = account === undefined ? "" : `[account: ${account}] `;
   if (error instanceof MailgunApiError) {
-    const endpoint = `${method.toUpperCase()} ${path}`;
+    const endpoint = `${prefix}${method.toUpperCase()} ${path}`;
     switch (error.statusCode) {
       case HttpStatus.UNAUTHORIZED:
-        return `Authentication failed for ${endpoint}. Verify your MAILGUN_API_KEY is correct and active.`;
+        return (
+          `Authentication failed for ${endpoint}. Verify the API key configured for ` +
+          `${account === undefined ? "this server" : `account "${account}"`} is correct and active.`
+        );
       case HttpStatus.FORBIDDEN:
         return (
           `Access denied for ${endpoint}. Your current Mailgun plan may not include this capability. ` +
@@ -223,5 +254,5 @@ export function formatErrorMessage(error: unknown, method: string, path: string)
         return `Mailgun API error (HTTP ${error.statusCode}) for ${endpoint}: ${error.apiMessage ?? error.message}`;
     }
   }
-  return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  return `${prefix}Error: ${error instanceof Error ? error.message : String(error)}`;
 }

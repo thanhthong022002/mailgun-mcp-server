@@ -1,5 +1,5 @@
 import https from "node:https";
-import { MAILGUN_API_KEY, MAILGUN_API_HOSTNAME } from "./config.js";
+import { resolveAccount } from "./accounts.js";
 
 export class MailgunApiError extends Error {
   constructor(
@@ -12,18 +12,23 @@ export class MailgunApiError extends Error {
   }
 }
 
+// `account` names one of the configured Mailgun accounts; omitting it uses the
+// default account, and resolution throws when there is none to fall back on.
 export async function makeMailgunRequest(
   method: string,
   requestPath: string,
   data: Record<string, unknown> | null = null,
   contentType: string = "application/x-www-form-urlencoded",
+  account?: string,
 ): Promise<unknown> {
+  const { apiKey, apiHostname } = resolveAccount(account);
+
   return new Promise((resolve, reject) => {
     const cleanPath = requestPath.startsWith("/") ? requestPath.substring(1) : requestPath;
 
-    const auth = Buffer.from(`api:${MAILGUN_API_KEY}`).toString("base64");
+    const auth = Buffer.from(`api:${apiKey}`).toString("base64");
     const options: https.RequestOptions = {
-      hostname: MAILGUN_API_HOSTNAME,
+      hostname: apiHostname,
       path: `/${cleanPath}`,
       method: method,
       headers: {

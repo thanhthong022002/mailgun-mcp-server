@@ -111,8 +111,15 @@ export const endpoints: readonly EndpointEntry[] = [
 
   // Routes
   "GET /v3/routes",
+  "POST /v3/routes",
+  "GET /v3/routes/match",
   "GET /v3/routes/{id}",
   "PUT /v3/routes/{id}",
+
+  // SMTP Credentials
+  "GET /v3/domains/{domain_name}/credentials",
+  "POST /v3/domains/{domain_name}/credentials",
+  "PUT /v3/domains/{domain_name}/credentials/{spec}",
 
   // Mailing Lists
   "GET /v3/lists",
