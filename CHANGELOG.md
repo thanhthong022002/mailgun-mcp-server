@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.3.0
+
+### Added
+
+- **Multiple Mailgun accounts.** One API key manages one Mailgun account, so a single-key
+  server could only ever reach that account's domains. The server now accepts a JSON
+  description of several accounts and routes each tool call to the one it names:
+  `MAILGUN_ACCOUNTS` (inline), `MAILGUN_ACCOUNTS_FILE`, or `--accounts-file`. Each account
+  carries its own `apiKey`, `region`/`apiHostname` and optional `description`, so a US and
+  an EU account can be served side by side.
+  - Every generated tool gains an `account` parameter, published as an enum of the
+    configured names so the model cannot invent one. It is required only when several
+    accounts are configured with no `defaultAccount` — otherwise it falls back, and
+    single-account setups never see a behaviour change.
+  - Tool results and error messages are prefixed with `[account: <name>]`, so which
+    account acted is always visible in the transcript.
+  - Shorthands for short configs: the `accounts` wrapper may be omitted, and an account
+    whose only setting is its key may be written as the key string.
+  - An unknown `region` is rejected at startup rather than silently resolving to the US
+    host; the legacy `MAILGUN_API_REGION` path keeps its lenient behaviour.
+- **`list_mailgun_accounts` tool.** Returns the configured accounts and the sending
+  domains each one manages, so an agent can resolve a domain to its owning account
+  instead of guessing. Registered under every product tag, since account discovery is a
+  prerequisite for all of them. Pass `include_domains: false` to skip the per-account
+  `GET /v4/domains` lookup; an account whose lookup fails is reported inline rather than
+  failing the whole listing.
+- **Domain lookup caching.** Each account's domain list is cached in-process for 24 hours,
+  so resolving a domain to its account costs one `GET /v4/domains` per account per day
+  rather than one per conversation. A domain belongs to exactly one account and does not
+  migrate, so a cached entry cannot go wrong — only incomplete, when a domain is added
+  outside this server. Accounts whose lookup failed are not cached, and cached results
+  carry a `domains_cached_at` timestamp. The cache refreshes on `refresh: true`, and
+  automatically after a successful `PUT /v4/domains/{name}/verify` — the only exposed
+  operation that changes what a listing reports. `MAILGUN_DOMAIN_CACHE_TTL` (seconds)
+  overrides the default; `0` disables caching.
+- **Inbound route management.** `POST /v3/routes` creates a route and
+  `GET /v3/routes/match` checks whether an address matches an existing one, alongside the
+  existing list, get, and update tools.
+- **SMTP credential management.** List, create, and rotate the SMTP users of a sending
+  domain: `GET`/`POST /v3/domains/{domain_name}/credentials` and
+  `PUT /v3/domains/{domain_name}/credentials/{spec}`. Leaving `password` unset has Mailgun
+  generate one — note that it is then returned in the tool response and therefore enters
+  the model's context. See the README's security notes.
+
+### Changed
+
+- `MAILGUN_API_KEY` is no longer required on its own: startup now requires exactly one of
+  `MAILGUN_ACCOUNTS`, `MAILGUN_ACCOUNTS_FILE`/`--accounts-file`, or `MAILGUN_API_KEY`, and
+  reports which sources it looked at when none is set. A key set the old way is registered
+  as the account `default` and remains the default account.
+- The server logs the accounts it loaded, their source, and the default (if any) to stderr
+  at startup.
+- The 401 error message names the account whose key failed instead of naming
+  `MAILGUN_API_KEY`.
+
 ## 2.2.0
 
 ### Added

@@ -19,6 +19,9 @@ export interface CliResult {
   activeTags: ActiveTags;
   transport: TransportKind;
   http: HttpOptions;
+  // Path to a JSON accounts file. A path is not a secret, so unlike the auth
+  // token it is accepted on the command line.
+  accountsFile: string | undefined;
   showHelp: boolean;
   listTags: boolean;
   invalid: string[];
@@ -33,6 +36,8 @@ const PORT_ENV_VAR = "MAILGUN_MCP_PORT";
 const ENDPOINT_ENV_VAR = "MAILGUN_MCP_ENDPOINT";
 const ALLOWED_HOSTS_ENV_VAR = "MAILGUN_MCP_ALLOWED_HOSTS";
 const AUTH_TOKEN_ENV_VAR = "MAILGUN_MCP_AUTH_TOKEN";
+const ACCOUNTS_FILE_ENV_VAR = "MAILGUN_ACCOUNTS_FILE";
+const ACCOUNTS_ENV_VAR = "MAILGUN_ACCOUNTS";
 
 export const DEFAULT_HTTP_HOST = "127.0.0.1";
 export const DEFAULT_HTTP_PORT = 3000;
@@ -45,6 +50,7 @@ const VALUE_FLAGS = [
   "--port",
   "--endpoint",
   "--allowed-hosts",
+  "--accounts-file",
 ] as const;
 
 type ValueFlag = (typeof VALUE_FLAGS)[number];
@@ -167,7 +173,9 @@ export function resolveActiveTags(argv: readonly string[], env: NodeJS.ProcessEn
     authToken: pick(undefined, env[AUTH_TOKEN_ENV_VAR]),
   };
 
-  const base = { transport, http, showHelp, listTags, errors };
+  const accountsFile = pick(values["--accounts-file"], env[ACCOUNTS_FILE_ENV_VAR]);
+
+  const base = { transport, http, accountsFile, showHelp, listTags, errors };
 
   const rawTags = values["--tags"] !== undefined ? values["--tags"] : env[TAGS_ENV_VAR];
 
@@ -203,6 +211,9 @@ export function formatHelp(): string {
     `  --tags <list>      Comma-separated product tags to enable (default: all).`,
     `                     Valid: ${tagList}`,
     "  --list-tags        Print valid tag values and exit",
+    "  --accounts-file <path>",
+    "                     JSON file describing the Mailgun accounts to manage.",
+    "                     Takes precedence over the environment.",
     `  --transport <kind> ${TRANSPORTS.join(" | ")} (default: stdio)`,
     "  --help, -h         Show this help and exit",
     "",
@@ -216,9 +227,14 @@ export function formatHelp(): string {
     "                     interface; otherwise defaults to the loopback aliases.",
     "",
     "Environment:",
-    "  MAILGUN_API_KEY        (required) Mailgun API key",
-    "  MAILGUN_API_REGION     'us' (default) or 'eu'",
-    "  MAILGUN_API_HOSTNAME   Override API hostname",
+    `  ${ACCOUNTS_ENV_VAR}       Inline JSON describing one or more Mailgun accounts:`,
+    '                         {"accounts":{"name":{"apiKey":"...","region":"us"}},',
+    '                          "defaultAccount":"name"}',
+    `  ${ACCOUNTS_FILE_ENV_VAR}  Same JSON, read from a file. Same as --accounts-file.`,
+    "  MAILGUN_API_KEY        Single Mailgun API key. Used when neither of the",
+    "                         above is set, and registered as the account 'default'.",
+    "  MAILGUN_API_REGION     'us' (default) or 'eu'. Applies to MAILGUN_API_KEY.",
+    "  MAILGUN_API_HOSTNAME   Override API hostname. Applies to MAILGUN_API_KEY.",
     `  ${TAGS_ENV_VAR}       Same as --tags. CLI flag takes precedence.`,
     `  ${TRANSPORT_ENV_VAR}  Same as --transport.`,
     `  ${HOST_ENV_VAR}       Same as --host.`,
@@ -235,6 +251,7 @@ export function formatHelp(): string {
     "  MAILGUN_API_KEY=... mailgun-mcp-server",
     "  MAILGUN_API_KEY=... mailgun-mcp-server --tags validate,inspect",
     "  MAILGUN_API_KEY=... mailgun-mcp-server --transport http --port 3000",
+    "  mailgun-mcp-server --accounts-file ./mailgun-accounts.json",
   ].join("\n");
 }
 

@@ -292,8 +292,20 @@ describe("formatErrorMessage()", () => {
     const err = new MailgunApiError("Unauthorized", 401, "Unauthorized");
     const msg = formatErrorMessage(err, "GET", "/v4/address/validate");
     expect(msg).toContain("Authentication failed");
-    expect(msg).toContain("MAILGUN_API_KEY");
+    expect(msg).toContain("API key configured");
     expect(msg).toContain("GET /v4/address/validate");
+  });
+
+  test("names the account in the 401 message when one is known", () => {
+    const err = new MailgunApiError("Unauthorized", 401, "Unauthorized");
+    const msg = formatErrorMessage(err, "GET", "/v4/address/validate", "clientb");
+    expect(msg).toContain('account "clientb"');
+    expect(msg).toContain("[account: clientb]");
+  });
+
+  test("prefixes non-API errors with the account when known", () => {
+    const msg = formatErrorMessage(new Error("socket hang up"), "GET", "/v3/routes", "xomad");
+    expect(msg).toBe("[account: xomad] Error: socket hang up");
   });
 
   test("formats 403 with plan upgrade guidance", () => {

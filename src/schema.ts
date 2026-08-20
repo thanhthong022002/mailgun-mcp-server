@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import { z } from "zod";
 import type {
   OpenApiOperation,
   OpenApiParameter,
@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import { openapiToZod, resolveReference } from "./openapi.js";
 import { toOptional } from "./zod-utils.js";
+import { tryGetActiveAccountsConfig } from "./accounts.js";
 
 export function sanitizePropertyKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 64);
@@ -103,4 +104,53 @@ export function processRequestBody(
 
     break;
   }
+}
+
+// --- Account selection ---
+
+export const ACCOUNT_PARAM = "account";
+// Used when an operation already defines a parameter called `account`.
+export const ACCOUNT_PARAM_FALLBACK = "mailgun_account";
+
+// Describes the configured accounts as an enum so the model can only pick a real
+// one. Falls back to a plain string when no configuration has loaded yet, which
+// keeps schema construction independent of startup validation.
+export function accountParamSchema(): z.ZodType {
+  const config = tryGetActiveAccountsConfig();
+  const names = config ? [...config.accounts.keys()] : [];
+
+  if (names.length === 0) {
+    return toOptional(z.string().describe("Mailgun account to act on."));
+  }
+
+  const suffix =
+    config?.defaultAccount !== undefined
+      ? ` Defaults to "${config.defaultAccount}" when omitted.`
+      : " This server has no default account, so it must be set explicitly.";
+  const described = z
+    .enum(names as [string, ...string[]])
+    .describe(
+      `Mailgun account to act on. Each account is a separate Mailgun API key owning its own domains. ` +
+        `Configured accounts: ${names.join(", ")}.${suffix} ` +
+        `Use list_mailgun_accounts to see which domains each account manages.`,
+    );
+
+  // Required exactly when there is nothing sensible to fall back to.
+  return config?.defaultAccount === undefined ? described : toOptional(described);
+}
+
+// Adds the account selector to a generated tool schema and reports the key it
+// landed on. Returns undefined when both candidate names are already taken, in
+// which case the tool silently uses the default account.
+export function addAccountParam(paramsSchema: Record<string, z.ZodType>): string | undefined {
+  const key =
+    paramsSchema[ACCOUNT_PARAM] === undefined
+      ? ACCOUNT_PARAM
+      : paramsSchema[ACCOUNT_PARAM_FALLBACK] === undefined
+        ? ACCOUNT_PARAM_FALLBACK
+        : undefined;
+  if (key === undefined) return undefined;
+
+  paramsSchema[key] = accountParamSchema();
+  return key;
 }

@@ -129,6 +129,28 @@ describe("endpoint validation against OpenAPI spec", () => {
   });
 });
 
+describe("routes and SMTP credential coverage", () => {
+  const paths = endpoints.map((e) => parseEndpointEntry(e)).map((e) => `${e.method} ${e.path}`);
+
+  test("routes can be listed, matched, created and updated", () => {
+    expect(paths).toContain("GET /v3/routes");
+    expect(paths).toContain("GET /v3/routes/{id}");
+    expect(paths).toContain("GET /v3/routes/match");
+    expect(paths).toContain("POST /v3/routes");
+    expect(paths).toContain("PUT /v3/routes/{id}");
+  });
+
+  test("SMTP credentials can be listed, created and rotated", () => {
+    expect(paths).toContain("GET /v3/domains/{domain_name}/credentials");
+    expect(paths).toContain("POST /v3/domains/{domain_name}/credentials");
+    expect(paths).toContain("PUT /v3/domains/{domain_name}/credentials/{spec}");
+  });
+
+  test("no delete operation is exposed", () => {
+    expect(paths.filter((p) => p.startsWith("DELETE "))).toEqual([]);
+  });
+});
+
 describe("schema property key validation against Anthropic API pattern", () => {
   const KEY_PATTERN = /^[a-zA-Z0-9_.-]{1,64}$/;
 

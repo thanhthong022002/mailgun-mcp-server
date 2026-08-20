@@ -264,18 +264,27 @@ describe("registerCustomTools()", () => {
     const mockRegisterTool = vi.fn<(...args: unknown[]) => void>();
     registerCustomTools({ registerTool: mockRegisterTool } as never, new Set(["validate"]));
 
-    expect(mockRegisterTool).not.toHaveBeenCalled();
+    const names = mockRegisterTool.mock.calls.map((c) => c[0]);
+    expect(names).not.toContain("get_metrics_summary");
   });
 
   test("intersecting activeTags registers get_metrics_summary with _meta", () => {
     const mockRegisterTool = vi.fn<(...args: unknown[]) => void>();
     registerCustomTools({ registerTool: mockRegisterTool } as never, new Set(["send"]));
 
-    expect(mockRegisterTool).toHaveBeenCalledTimes(1);
-    expect(mockRegisterTool.mock.calls[0][0]).toBe("get_metrics_summary");
-    const config = mockRegisterTool.mock.calls[0][1] as {
-      _meta?: Record<string, unknown>;
-    };
+    const call = mockRegisterTool.mock.calls.find((c) => c[0] === "get_metrics_summary");
+    expect(call).toBeDefined();
+    const config = call?.[1] as { _meta?: Record<string, unknown> };
     expect(config._meta).toEqual({ "com.mailgun/tags": ["send"] });
+  });
+
+  test("list_mailgun_accounts registers under every tag", () => {
+    for (const tag of ["send", "validate", "optimize", "inspect"] as const) {
+      const mockRegisterTool = vi.fn<(...args: unknown[]) => void>();
+      registerCustomTools({ registerTool: mockRegisterTool } as never, new Set([tag]));
+
+      const names = mockRegisterTool.mock.calls.map((c) => c[0]);
+      expect(names).toContain("list_mailgun_accounts");
+    }
   });
 });
