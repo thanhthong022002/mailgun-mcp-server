@@ -16,7 +16,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for [Ma
 - **Messaging** — Send emails, retrieve stored messages, resend messages
 - **Domains** — View domain details, verify DNS configuration, manage tracking settings (click, open, unsubscribe)
 - **Webhooks** — List, create, and update event webhooks
-- **Routes** — View and update inbound email routing rules
+- **Routes** — View, match, create, and update inbound email routing rules
 - **Mailing Lists** — Create, view, and update mailing lists and their members
 - **Templates** — Create, view, and update email templates with versioning
 - **Analytics** — Query sending metrics, usage metrics, and logs
@@ -27,7 +27,9 @@ A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server for [Ma
 - **Validation** — Validate email address deliverability and syntax before sending (`validate`)
 - **Optimize (Inbox Placement)** — Retrieve inbox placement / seed test results to gauge deliverability (`optimize`)
 - **Inspect (Email Preview)** — Retrieve email rendering and preview test results across clients (`inspect`)
+- **SMTP Credentials** — List, create, and rotate the SMTP users of a sending domain
 - **Account Limits** — View custom monthly sending limits
+- **Multi-account** — Manage several Mailgun accounts from one server, and discover which account owns which domain (`list_mailgun_accounts`, cached for 24 hours)
 
 The parenthetical labels above (`validate`, `optimize`, `inspect`) are the product tags used by [tag filtering](#tag-filtering). Every other capability is registered under the `send` tag.
 
@@ -36,7 +38,7 @@ The parenthetical labels above (`validate`, `optimize`, `inspect`) are the produ
 
 ### How it works
 
-The server is OpenAPI driven. At startup it parses a bundled Mailgun OpenAPI spec and registers a curated allowlist of endpoints as MCP tools, generating each tool's input schema (via Zod) from the spec. Every tool is annotated with a Mailgun product tag (`send`, `validate`, `optimize`, or `inspect`). All matching tools are registered up front — there is no lazy or on demand loading. [Tag filtering](#tag-filtering) is applied at startup to scope *which* tools get registered, so a given workflow can expose only the products it needs.
+The server is OpenAPI driven. At startup it parses a bundled Mailgun OpenAPI spec and registers a curated allowlist of endpoints as MCP tools, generating each tool's input schema (via Zod) from the spec. Every tool is annotated with a Mailgun product tag (`send`, `validate`, `optimize`, or `inspect`). All matching tools are registered up front — there is no lazy or on demand loading. [Tag filtering](#tag-filtering) is applied at startup to scope *which* tools get registered, so a given workflow can expose only the products it needs. Every tool also carries an `account` parameter naming which of the [configured Mailgun accounts](#multiple-accounts) to act on.
 
 ## Prerequisites
 
@@ -166,9 +168,12 @@ Add to `~/.gemini/settings.json`:
 
 | Variable               | Required | Default              | Description                                                                                 |
 | ---------------------- | -------- | -------------------- | ------------------------------------------------------------------------------------------- |
-| `MAILGUN_API_KEY`      | Yes      | —                    | Your Mailgun API key                                                                        |
-| `MAILGUN_API_REGION`   | No       | `us`                 | API region: `us` or `eu`                                                                     |
-| `MAILGUN_API_HOSTNAME` | No       | (derived from region) | Override the API hostname (e.g. `api.eu.mailgun.net`). Takes precedence over the region.     |
+| `MAILGUN_ACCOUNTS`     | No\*     | —                    | Inline JSON describing one or more Mailgun accounts. See [Multiple accounts](#multiple-accounts). |
+| `MAILGUN_ACCOUNTS_FILE` | No\*    | —                    | Path to a file holding the same JSON. Equivalent to `--accounts-file`, which takes precedence. |
+| `MAILGUN_API_KEY`      | No\*     | —                    | A single Mailgun API key, registered as the account `default`. Used only when neither variable above is set. |
+| `MAILGUN_API_REGION`   | No       | `us`                 | API region for `MAILGUN_API_KEY`: `us` or `eu`                                               |
+| `MAILGUN_API_HOSTNAME` | No       | (derived from region) | Override the API hostname for `MAILGUN_API_KEY` (e.g. `api.eu.mailgun.net`). Takes precedence over the region. |
+| `MAILGUN_DOMAIN_CACHE_TTL` | No   | `86400`              | How long, in seconds, to cache each account's domain list. `0` disables caching. See [Domain lookup caching](#domain-lookup-caching). |
 | `MAILGUN_MCP_TAGS`     | No       | (all)                | Comma-separated product tags to enable. Equivalent to `--tags`. The CLI flag takes precedence. |
 | `MAILGUN_MCP_TRANSPORT` | No      | `stdio`              | Transport to serve: `stdio` or `http`. Equivalent to `--transport`.                          |
 | `MAILGUN_MCP_HOST`     | No       | `127.0.0.1`          | HTTP transport bind interface. Equivalent to `--host`.                                       |
@@ -176,6 +181,8 @@ Add to `~/.gemini/settings.json`:
 | `MAILGUN_MCP_ENDPOINT` | No       | `/mcp`               | HTTP transport request path. Equivalent to `--endpoint`.                                     |
 | `MAILGUN_MCP_ALLOWED_HOSTS` | No  | (loopback aliases)   | Comma-separated `Host` header values accepted by the DNS-rebinding guard. Equivalent to `--allowed-hosts`. |
 | `MAILGUN_MCP_AUTH_TOKEN` | No     | (none)               | If set, HTTP requests must send `Authorization: Bearer <token>`. **Env-only** — there is no CLI flag, so the token stays out of the process command line. |
+
+\* Exactly one credential source is required. The server refuses to start with none of `MAILGUN_ACCOUNTS`, `MAILGUN_ACCOUNTS_FILE` / `--accounts-file`, or `MAILGUN_API_KEY` set.
 
 ### CLI options
 
@@ -185,6 +192,7 @@ Pass flags after the package name in your client's `args` (e.g. `["-y", "@mailgu
 | ----------------- | -------------------------------------------------------------------------------------- |
 | `--tags <list>`   | Comma-separated product tags to enable (default: all). Valid: `send`, `validate`, `optimize`, `inspect`. |
 | `--list-tags`     | Print the valid tag values and exit.                                                   |
+| `--accounts-file <path>` | JSON file describing the Mailgun accounts to manage. Takes precedence over the environment. |
 | `--transport <kind>` | Transport to serve: `stdio` (default) or `http`.                                     |
 | `--host <host>`   | HTTP transport: interface to bind (default: `127.0.0.1`).                               |
 | `--port <port>`   | HTTP transport: port to listen on, `0` for any free port (default: `3000`).             |
@@ -193,6 +201,90 @@ Pass flags after the package name in your client's `args` (e.g. `["-y", "@mailgu
 | `--help`, `-h`    | Show usage and exit.                                                                    |
 
 Every flag has an environment-variable equivalent (see the table above). The CLI flag wins when both are set.
+
+### Multiple accounts
+
+One Mailgun API key manages every domain in one Mailgun account. To work across several accounts — separate business units, separate clients, or a US and an EU account — describe them as JSON instead of setting a single `MAILGUN_API_KEY`:
+
+```json
+{
+  "accounts": {
+    "acme": {
+      "apiKey": "key-acme...",
+      "region": "us",
+      "description": "Acme production sending"
+    },
+    "globex": {
+      "apiKey": "key-globex...",
+      "region": "eu"
+    }
+  },
+  "defaultAccount": "acme"
+}
+```
+
+Supply it inline through `MAILGUN_ACCOUNTS`, or keep it in a file referenced by `MAILGUN_ACCOUNTS_FILE` / `--accounts-file`:
+
+```json
+{
+  "mcpServers": {
+    "mailgun": {
+      "command": "npx",
+      "args": ["-y", "@mailgun/mcp-server", "--accounts-file", "/etc/mailgun/accounts.json"]
+    }
+  }
+}
+```
+
+Per-account fields:
+
+| Field         | Required | Description                                                                       |
+| ------------- | -------- | --------------------------------------------------------------------------------- |
+| `apiKey`      | Yes      | The account's Mailgun API key. `api_key` is accepted as an alias.                 |
+| `region`      | No       | `us` (default) or `eu`. An unknown value is rejected at startup rather than silently routed to the US host. |
+| `apiHostname` | No       | Override the host derived from `region`. `api_hostname` is accepted as an alias.  |
+| `description` | No       | Free text shown to the model by `list_mailgun_accounts`, e.g. what the account is for. |
+
+Two shorthands keep short configs readable: the `accounts` wrapper may be dropped (`{"acme": {...}, "globex": {...}}`), and an account whose only setting is its key may be written as the key itself (`{"acme": "key-acme..."}`).
+
+Account names must match `[A-Za-z0-9_-]{1,64}` — they are published to the model as an enum.
+
+#### How the model picks an account
+
+Every tool gains an `account` parameter whose allowed values are exactly the configured names, so a model cannot invent one. Whether it is required depends on your config:
+
+| Configuration                             | `account` parameter | Omitting it                       |
+| ----------------------------------------- | ------------------- | --------------------------------- |
+| One account (including `MAILGUN_API_KEY`) | Optional            | Uses that account                 |
+| Several accounts, `defaultAccount` set    | Optional            | Uses `defaultAccount`             |
+| Several accounts, no `defaultAccount`     | **Required**        | Tool call fails with the valid names |
+
+Leaving `defaultAccount` unset is the safer choice for write-heavy setups: it forces every call to state its target rather than silently falling back to one. Tool results are prefixed with `[account: <name>]` so the account in play is always visible.
+
+Because a domain lives in exactly one account, the model needs a way to go from a domain to the account that owns it. That is `list_mailgun_accounts`: it returns the configured accounts and, unless you pass `include_domains: false`, the sending domains each one manages (one `GET /v4/domains` per account, issued concurrently, with a failure on one account reported inline rather than failing the listing).
+
+```
+> Which account owns mg.acme.com, and what is its bounce rate this week?
+
+  list_mailgun_accounts  →  acme owns mg.acme.com (active), globex owns mg.globex.eu
+  get_metrics_summary    →  { account: "acme", domain: "mg.acme.com", ... }
+```
+
+Single-account setups are unaffected: `MAILGUN_API_KEY` still works on its own, registers as the account `default`, and `account` stays optional everywhere.
+
+#### Domain lookup caching
+
+Domain listings are cached in the server process for **24 hours**, per account. A domain belongs to exactly one Mailgun account and does not migrate between them, so a cached entry never becomes *wrong* — it only becomes *incomplete* when a domain is added outside this server. That asymmetry is what makes a long TTL safe.
+
+Practically: the first `list_mailgun_accounts` of the day costs one `GET /v4/domains` per account, and subsequent calls — in that session or any later one against the same process — are free. Accounts whose lookup failed are not cached, so they are retried on the next call rather than caching an error for a day. Cached entries carry a `domains_cached_at` timestamp in the response so the model can see the data's age.
+
+Three ways the cache refreshes:
+
+- **`refresh: true`** on `list_mailgun_accounts` re-reads every listed account. Use it right after adding a domain in the Mailgun dashboard.
+- **Automatic invalidation** after a successful `PUT /v4/domains/{name}/verify`, which changes a domain's state. That is the only exposed operation that alters what a listing reports — the server exposes no domain create or delete — so it is the only automatic trigger.
+- **`MAILGUN_DOMAIN_CACHE_TTL`**, in seconds, overrides the 24-hour default. Set it to `0` to disable caching entirely.
+
+The cache lives in the server process, so it is shared across HTTP-transport sessions. Those sessions already share the same API keys, so there is nothing to isolate between them; restarting the server clears it.
 
 ### Tag filtering
 
@@ -301,6 +393,32 @@ Would you be able to make a chart with email delivery statistics for the past we
 ```
 Create a welcome email template for new signups on my domain DOMAIN_HERE.
 Include a personalized greeting and a call-to-action button.
+```
+
+#### Work Across Accounts
+
+```
+Which of my Mailgun accounts owns notifications.acme.com?
+```
+
+```
+Compare last week's bounce rate for mg.acme.com on the acme account against mg.globex.eu on globex.
+```
+
+#### Manage Inbound Routes
+
+```
+On the acme account, show me the route that catches support@ mail and what it forwards to.
+```
+
+```
+Would replies@acme.com match any existing route on the acme account?
+```
+
+#### Manage SMTP Users
+
+```
+List the SMTP credentials on mg.acme.com for the acme account.
 ```
 
 #### Investigate Deliverability
@@ -453,7 +571,9 @@ When adding a new endpoint if you use a plain string for it's definition it will
 
 ### API key isolation
 
-Your Mailgun API key is passed as an environment variable and is never exposed to the AI model itself — it is only used by the MCP server process to authenticate requests. The server does not log API keys, request parameters, or response data.
+Your Mailgun API keys are passed as environment variables (or in an accounts file) and are never exposed to the AI model itself — the model only ever sees an account *name*, and the process maps that name to a key when authenticating. The server does not log API keys, request parameters, or response data.
+
+When you configure several accounts, remember that the server can reach all of them: any client that can call the server can act on every configured account. Configure only the accounts a given workflow needs, and run separate server instances when two workflows must not share reach.
 
 ### Local execution
 
@@ -471,6 +591,10 @@ The defaults keep the blast radius small, and each can be widened deliberately:
 - **No CORS headers.** Browser-based clients are not supported; front the server with a proxy if you need them.
 
 Requests are capped at 4 MB. For anything beyond a trusted network, terminate TLS and enforce authentication in a reverse proxy in front of the server — the built-in bearer check is a guard rail, not an authorization system.
+
+### SMTP credential passwords
+
+`post-v3-domains-domain-credentials` creates an SMTP user for a domain. Leave `password` unset and Mailgun generates one — but it is then returned in the tool response, which means it lands in the model's context and in your client's transcript. Treat any password created this way as exposed: rotate it with `put-v3-domains-domain-credentials-spec` once it has been stored somewhere safe, or create the credential in the Mailgun dashboard when the password must never transit the conversation.
 
 ### API key permissions
 

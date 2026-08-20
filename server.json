@@ -3,12 +3,12 @@
   "name": "com.mailgun/mailgun-mcp-server",
   "title": "Mailgun MCP Server",
   "description": "An MCP server for sending email, investigating deliverability, and managing Mailgun accounts.",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@mailgun/mcp-server",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "runtimeHint": "npx",
       "runtimeArguments": [
         {
@@ -18,14 +18,25 @@
       ],
       "environmentVariables": [
         {
+          "name": "MAILGUN_ACCOUNTS",
+          "description": "JSON describing one or more Mailgun accounts, e.g. {\"accounts\":{\"acme\":{\"apiKey\":\"key-...\",\"region\":\"us\"}},\"defaultAccount\":\"acme\"}. Required unless MAILGUN_ACCOUNTS_FILE or MAILGUN_API_KEY is set.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MAILGUN_ACCOUNTS_FILE",
+          "description": "Path to a file holding the MAILGUN_ACCOUNTS JSON.",
+          "isRequired": false
+        },
+        {
           "name": "MAILGUN_API_KEY",
-          "description": "Mailgun API key from https://app.mailgun.com/settings/api_security",
-          "isRequired": true,
+          "description": "Single Mailgun API key from https://app.mailgun.com/settings/api_security, registered as the account 'default'. Used when MAILGUN_ACCOUNTS and MAILGUN_ACCOUNTS_FILE are unset.",
+          "isRequired": false,
           "isSecret": true
         },
         {
           "name": "MAILGUN_API_REGION",
-          "description": "API region: us or eu",
+          "description": "API region for MAILGUN_API_KEY: us or eu",
           "isRequired": false,
           "default": "us"
         }
